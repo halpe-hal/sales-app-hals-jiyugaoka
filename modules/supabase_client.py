@@ -1,0 +1,8 @@
+# modules/supabase_client.py
+
+from supabase import create_client
+
+SUPABASE_URL = "https://pvsigckrxrfyvxmgczab.supabase.co"
+SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2c2lnY2tyeHJmeXZ4bWdjemFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY1MjMxNzEsImV4cCI6MjA2MjA5OTE3MX0.os6T3GIQGuf0zxMSaCzlE2J1iEeCGVI2F23mLwPrlDA"
+
+supabase = create_client(SUPABASE_URL, SUPABASE_API_KEY)
