@@ -13,7 +13,7 @@ def show():
     st.markdown("<h2>売上目標の設定</h2>", unsafe_allow_html=True)
 
     # --- 管理者チェック ---
-    if "user" not in st.session_state or st.session_state["user"]["email"] not in ["nishimura@kklia.com"]:
+    if "user" not in st.session_state or st.session_state["user"]["email"] not in ["nishimura@kklia.com", "halsbagel.jiyugaoka@gmail.com"]:
         st.warning("この画面にはアクセスできません。")
         st.stop()
 
