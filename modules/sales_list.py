@@ -34,6 +34,7 @@ def show():
 def show_daily_supabase(year, month):
     sales_data = db.fetch_sales_data(year, month)
     targets_data = db.fetch_targets(year, month)
+    prev_sales_data = db.fetch_sales_data(year - 1, month)
 
     sales_df = pd.DataFrame(sales_data)
     targets_df = pd.DataFrame(targets_data)
@@ -44,6 +45,14 @@ def show_daily_supabase(year, month):
 
     sales_df["date"] = pd.to_datetime(sales_df["date"])
     targets_df["date"] = pd.to_datetime(targets_df["date"])
+
+    # 前年データを日→実績のdictに変換
+    prev_actual_by_day = {}
+    if prev_sales_data:
+        prev_df = pd.DataFrame(prev_sales_data)
+        prev_df["date"] = pd.to_datetime(prev_df["date"])
+        for prev_dt, grp in prev_df.groupby(prev_df["date"].dt.day):
+            prev_actual_by_day[prev_dt] = grp["actual_sales"].sum()
 
     # --- CSVダウンロード用データ作成 ---
     export_df = sales_df.copy()
@@ -80,12 +89,16 @@ def show_daily_supabase(year, month):
         achievement = round(actual * 100 / target, 2) if target else None
         unit_price = store / cust if cust else None
 
+        prev_actual = prev_actual_by_day.get(d.day)
+        yoy = round(actual * 100 / prev_actual, 2) if prev_actual else None
+
         totals["target"] += target if target else 0
         totals["actual"] += actual
         totals["store"] += store
         totals["delivery"] += delivery
         totals["other"] += other
         totals["cust"] += utils.safe_convert_to_int(cust)
+        totals["prev_actual"] += prev_actual if prev_actual else 0
 
         weekday_jp = d.strftime('%a')
         weekday_jp = {"Mon": "月", "Tue": "火", "Wed": "水", "Thu": "木",
@@ -96,7 +109,8 @@ def show_daily_supabase(year, month):
         rows.append({
             "日付": d.strftime("%Y/%m/%d"),
             "曜日": weekday_jp,
-            "達成率": format_achievement(achievement),
+            "目標達成率": format_achievement(achievement),
+            "前年比": format_achievement(yoy),
             "目標売上": format_currency(target),
             "実績": format_currency(actual),
             "店舗売上": format_currency(store),
@@ -107,12 +121,14 @@ def show_daily_supabase(year, month):
         })
 
     # --- 合計行 ---
+    total_yoy = round(totals["actual"] * 100 / totals["prev_actual"], 2) if totals["prev_actual"] else None
     summary = {
         "日付": "<b>合計</b>",
         "曜日": "",
-        "達成率": format_achievement(
+        "目標達成率": format_achievement(
             totals["actual"] * 100 / totals["target"]
         ) if totals["target"] else "",
+        "前年比": format_achievement(total_yoy),
         "目標売上": f"<b>{int(totals['target']):,}円</b>" if totals["target"] else "",
         "実績": f"<b>{int(totals['actual']):,}円</b>",
         "店舗売上": f"<b>{int(totals['store']):,}円</b>",
@@ -130,6 +146,7 @@ def show_daily_supabase(year, month):
 def show_monthly_supabase(year):
     sales_data = db.fetch_sales_data(year=year)
     targets_data = db.fetch_targets(year=year)
+    prev_sales_data = db.fetch_sales_data(year=year - 1)
 
     sales_df = pd.DataFrame(sales_data)
     targets_df = pd.DataFrame(targets_data)
@@ -153,17 +170,29 @@ def show_monthly_supabase(year):
     targets_df["month"] = pd.to_datetime(targets_df["date"]).dt.month
     target_grouped = targets_df.groupby("month").agg({"target_sales": "sum"}).reset_index()
 
+    # 前年月別実績
+    prev_actual_by_month = {}
+    if prev_sales_data:
+        prev_df = pd.DataFrame(prev_sales_data)
+        prev_df["month"] = pd.to_datetime(prev_df["date"]).dt.month
+        prev_grouped = prev_df.groupby("month")["actual_sales"].sum()
+        prev_actual_by_month = prev_grouped.to_dict()
+
     df_merged = pd.merge(df_grouped, target_grouped, on="month", how="left")
     df_merged["客単価"] = df_merged.apply(
         lambda r: r["store_sales"] / r["customer_count"] if r["customer_count"] else 0, axis=1
     )
-    df_merged["達成率"] = df_merged.apply(
+    df_merged["目標達成率"] = df_merged.apply(
         lambda r: round(r["actual_sales"] * 100 / r["target_sales"], 2)
         if r["target_sales"] else None, axis=1
     )
+    df_merged["前年比"] = df_merged.apply(
+        lambda r: round(r["actual_sales"] * 100 / prev_actual_by_month[r["month"]], 2)
+        if r["month"] in prev_actual_by_month and prev_actual_by_month[r["month"]] else None, axis=1
+    )
     df_merged["月"] = df_merged["month"].apply(lambda m: f"{m}月")
 
-    df_display = df_merged[["月", "達成率", "target_sales", "actual_sales",
+    df_display = df_merged[["月", "目標達成率", "前年比", "target_sales", "actual_sales",
                            "store_sales", "delivery_sales", "other_sales", "customer_count", "客単価"]]
     df_display = df_display.rename(columns={
         "target_sales": "目標売上",
@@ -174,13 +203,18 @@ def show_monthly_supabase(year):
         "customer_count": "客数"
     })
 
+    prev_total = sum(prev_actual_by_month.values())
+    total_actual = df_display["実績"].sum()
     total_row = {
         "月": "<b>合計</b>",
-        "達成率": format_achievement(
-            df_display["実績"].sum() * 100 / df_display["目標売上"].sum()
+        "目標達成率": format_achievement(
+            total_actual * 100 / df_display["目標売上"].sum()
         ) if df_display["目標売上"].sum() else "",
+        "前年比": format_achievement(
+            total_actual * 100 / prev_total
+        ) if prev_total else "",
         "目標売上": f"<b>{int(df_display['目標売上'].sum()):,}円</b>",
-        "実績": f"<b>{int(df_display['実績'].sum()):,}円</b>",
+        "実績": f"<b>{int(total_actual):,}円</b>",
         "店舗売上": f"<b>{int(df_display['店舗売上'].sum()):,}円</b>",
         "デリバリー売上": f"<b>{int(df_display['デリバリー売上'].sum()):,}円</b>",
         "その他売上": f"<b>{int(df_display['その他売上'].sum()):,}円</b>",
@@ -190,7 +224,8 @@ def show_monthly_supabase(year):
     }
 
     df_display = pd.concat([pd.DataFrame([total_row]), df_display], ignore_index=True)
-    df_display.loc[1:, "達成率"] = df_display.loc[1:, "達成率"].apply(format_achievement)
+    df_display.loc[1:, "目標達成率"] = df_display.loc[1:, "目標達成率"].apply(format_achievement)
+    df_display.loc[1:, "前年比"] = df_display.loc[1:, "前年比"].apply(format_achievement)
 
     for col in ["目標売上", "実績", "店舗売上", "デリバリー売上", "その他売上", "客単価"]:
         df_display[col] = df_display[col].apply(
