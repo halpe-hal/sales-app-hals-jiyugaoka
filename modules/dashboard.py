@@ -66,18 +66,32 @@ def _build_summary(df_source: pd.DataFrame) -> pd.DataFrame:
     return summary.sort_values("date")
 
 
-def _render_kpi(actual_total: float, target_total: float, title_prefix: str = ""):
-    if target_total > 0:
+def _render_kpi(actual_total: float, target_total: float, prev_actual: float = 0, title_prefix: str = ""):
+    has_target = target_total > 0
+    has_prev = prev_actual > 0
+
+    num_cols = 2 + (1 if has_target else 0) + (1 if has_prev else 0)
+    cols = st.columns(num_cols)
+    col_idx = 0
+
+    if has_target:
         achievement = round(actual_total * 100 / target_total, 2)
-        col1, col2, col3 = st.columns(3)
-        with col1:
+        with cols[col_idx]:
             st.metric(f"{title_prefix}達成率", f"{achievement:.2f}%")
-        with col2:
-            st.metric(f"{title_prefix}目標", f"¥{int(target_total):,}")
-        with col3:
-            st.metric(f"{title_prefix}実績", f"¥{int(actual_total):,}")
-    else:
-        st.info("目標が設定されていません。")
+        col_idx += 1
+
+    if has_prev:
+        yoy = round(actual_total * 100 / prev_actual, 2)
+        with cols[col_idx]:
+            st.metric(f"{title_prefix}前年比", f"{yoy:.2f}%")
+        col_idx += 1
+
+    with cols[col_idx]:
+        st.metric(f"{title_prefix}目標", f"¥{int(target_total):,}")
+    col_idx += 1
+
+    with cols[col_idx]:
+        st.metric(f"{title_prefix}実績", f"¥{int(actual_total):,}")
 
 
 def show():
@@ -100,8 +114,12 @@ def show():
 def show_dashboard(name: str, selected_year: int):
     st.markdown(f"<h3>{name} の年間目標達成率</h3>", unsafe_allow_html=True)
 
-    # --- 年間（選択年）データ ---
+    today = datetime.today()
+
+    # --- 年間（選択年 & 前年）データを一括取得 ---
     sales_year_df = _fetch_sales_multi_year([selected_year])
+    prev_year_df = _fetch_sales_multi_year([selected_year - 1])
+
     if sales_year_df.empty:
         st.info("売上データが存在しません。")
         return
@@ -114,7 +132,6 @@ def show_dashboard(name: str, selected_year: int):
     start_of_year_dt = datetime(selected_year, 1, 1)
     end_of_year_dt = datetime(selected_year, 12, 31, 23, 59, 59)
 
-    # その年のデータ最終日を基準日（途中まででも自然）
     last_data_dt = year_summary["date"].max()
     base_end_dt = min(last_data_dt, end_of_year_dt)
 
@@ -130,132 +147,169 @@ def show_dashboard(name: str, selected_year: int):
             (targets_year_df["date"] >= start_of_year_dt) & (targets_year_df["date"] <= base_end_dt)
         ]["target_sales"].sum()
 
-    _render_kpi(actual_year_total, target_year_total, title_prefix="年間")
+    # 前年同期間（年間）実績
+    prev_year_actual = 0
+    if not prev_year_df.empty:
+        prev_y_start = datetime(selected_year - 1, 1, 1)
+        prev_y_end = datetime(selected_year - 1, base_end_dt.month, base_end_dt.day, 23, 59, 59)
+        prev_year_actual = prev_year_df[
+            (prev_year_df["date"] >= prev_y_start) & (prev_year_df["date"] <= prev_y_end)
+        ]["actual_sales"].sum()
+
+    _render_kpi(actual_year_total, target_year_total, prev_year_actual, title_prefix="年間")
 
     # ============================================================
-    # 期間タブ：1月〜12月 + 任意期間（全体タブなし）
-    # 任意期間は年跨ぎOK（必要年を複数fetchして結合）
+    # 期間選択：プルダウン（1月〜12月 + 任意期間）
     # ============================================================
-    tab_names = [f"{m}月" for m in range(1, 13)] + ["任意期間"]
-    tf_tabs = st.tabs(tab_names)
+    period_options = [f"{m}月" for m in range(1, 13)] + ["任意期間"]
+    default_index = (today.month - 1) if selected_year == today.year else 0
 
-    default_free_start = (base_end_dt - timedelta(days=30)).date()
-    default_free_end = base_end_dt.date()
+    label = st.selectbox(
+        "期間",
+        period_options,
+        index=default_index,
+        key=f"period_select_{selected_year}"
+    )
 
-    for i, t in enumerate(tf_tabs):
-        with t:
-            label = tab_names[i]
+    # --- 期間決定 ---
+    if label.endswith("月"):
+        month = int(label.replace("月", ""))
 
-            # --- 期間決定 ---
-            if label.endswith("月"):
-                month = int(label.replace("月", ""))
+        start_date = datetime(selected_year, month, 1)
+        if month == 12:
+            end_date = datetime(selected_year, 12, 31, 23, 59, 59)
+        else:
+            end_date = datetime(selected_year, month + 1, 1) - timedelta(seconds=1)
 
-                start_date = datetime(selected_year, month, 1)
-                if month == 12:
-                    end_date = datetime(selected_year, 12, 31, 23, 59, 59)
-                else:
-                    end_date = datetime(selected_year, month + 1, 1) - timedelta(seconds=1)
+        end_date = min(end_date, base_end_dt)
+        if end_date < start_date:
+            st.info("該当するデータがありません。")
+            return
 
-                # 選択年が途中までなら基準日で頭打ち
-                end_date = min(end_date, base_end_dt)
-                if end_date < start_date:
-                    st.info("該当するデータがありません。")
-                    continue
+        df_source = sales_year_df.copy()
+        targets_source = targets_year_df.copy()
+        kpi_title_prefix = f"{month}月"
 
-                df_source = sales_year_df.copy()
-                targets_source = targets_year_df.copy()
-                kpi_title_prefix = f"{month}月"
-
+        # 前年同月実績
+        prev_actual_period = 0
+        if not prev_year_df.empty:
+            prev_m_start = datetime(selected_year - 1, month, 1)
+            if month == 12:
+                prev_m_end = datetime(selected_year - 1, 12, 31, 23, 59, 59)
             else:
-                col1, col2 = st.columns(2)
-                free_start = col1.date_input(
-                    "開始日",
-                    value=default_free_start,
-                    key=f"free_start_{selected_year}"
-                )
-                free_end = col2.date_input(
-                    "終了日",
-                    value=default_free_end,
-                    key=f"free_end_{selected_year}"
-                )
+                prev_m_end = datetime(selected_year - 1, month + 1, 1) - timedelta(seconds=1)
+            prev_actual_period = prev_year_df[
+                (prev_year_df["date"] >= prev_m_start) & (prev_year_df["date"] <= prev_m_end)
+            ]["actual_sales"].sum()
 
-                start_date = datetime.combine(free_start, datetime.min.time())
-                end_date = datetime.combine(free_end, datetime.max.time())
+    else:  # 任意期間
+        default_free_start = (base_end_dt - timedelta(days=30)).date()
+        default_free_end = base_end_dt.date()
 
-                if end_date < start_date:
-                    st.info("終了日は開始日以降にしてください。")
-                    continue
+        col1, col2 = st.columns(2)
+        free_start = col1.date_input(
+            "開始日",
+            value=default_free_start,
+            key=f"free_start_{selected_year}"
+        )
+        free_end = col2.date_input(
+            "終了日",
+            value=default_free_end,
+            key=f"free_end_{selected_year}"
+        )
 
-                years_needed = list(range(start_date.year, end_date.year + 1))
-                df_source = _fetch_sales_multi_year(years_needed)
-                targets_source = _fetch_targets_multi_year(years_needed)
-                kpi_title_prefix = "期間"
+        start_date = datetime.combine(free_start, datetime.min.time())
+        end_date = datetime.combine(free_end, datetime.max.time())
 
-            if df_source.empty:
-                st.info("該当するデータがありません。")
-                continue
+        if end_date < start_date:
+            st.info("終了日は開始日以降にしてください。")
+            return
 
-            # --- 期間サマリー ---
-            df_period = df_source.copy()
-            df_period["date"] = pd.to_datetime(df_period["date"])
-            df_period = df_period[(df_period["date"] >= start_date) & (df_period["date"] <= end_date)]
+        years_needed = list(range(start_date.year, end_date.year + 1))
+        df_source = _fetch_sales_multi_year(years_needed)
+        targets_source = _fetch_targets_multi_year(years_needed)
+        kpi_title_prefix = "期間"
 
-            summary = _build_summary(df_period)
-            if summary.empty:
-                st.info("該当するデータがありません。")
-                continue
+        # 前年同期間実績
+        prev_actual_period = 0
+        try:
+            prev_start = start_date.replace(year=start_date.year - 1)
+            prev_end = end_date.replace(year=end_date.year - 1)
+        except ValueError:
+            prev_start = start_date.replace(year=start_date.year - 1, day=28)
+            prev_end = end_date.replace(year=end_date.year - 1, day=28)
+        prev_years_needed = list(range(prev_start.year, prev_end.year + 1))
+        prev_free_df = _fetch_sales_multi_year(prev_years_needed)
+        if not prev_free_df.empty:
+            prev_actual_period = prev_free_df[
+                (prev_free_df["date"] >= prev_start) & (prev_free_df["date"] <= prev_end)
+            ]["actual_sales"].sum()
 
-            # --- 月（期間）KPI ---
-            actual_total = summary["actual_sales"].sum()
+    if df_source.empty:
+        st.info("該当するデータがありません。")
+        return
 
-            if targets_source.empty:
-                target_total = 0
-            else:
-                target_total = targets_source[
-                    (targets_source["date"] >= start_date) & (targets_source["date"] <= end_date)
-                ]["target_sales"].sum()
+    # --- 期間サマリー ---
+    df_period = df_source.copy()
+    df_period["date"] = pd.to_datetime(df_period["date"])
+    df_period = df_period[(df_period["date"] >= start_date) & (df_period["date"] <= end_date)]
 
-            _render_kpi(actual_total, target_total, title_prefix=f"{kpi_title_prefix} ")
+    summary = _build_summary(df_period)
+    if summary.empty:
+        st.info("該当するデータがありません。")
+        return
 
-            # --- 表示用整形 ---
-            summary_display = summary.copy()
-            summary_display["date"] = summary_display["date"].dt.strftime("%Y/%m/%d")
+    # --- 期間 KPI ---
+    actual_total = summary["actual_sales"].sum()
 
-            # --- グラフ ---
-            fig_sales = px.line(
-                summary_display, x="date", y="actual_sales",
-                title="売上推移", labels={"actual_sales": "売上（円）"}
-            )
-            fig_sales.update_traces(mode="lines+markers")
-            fig_sales.update_layout(xaxis_title="日付")
-            fig_sales.update_yaxes(tickformat=",")
-            st.plotly_chart(
-                fig_sales,
-                use_container_width=True,
-                key=f"sales_chart_{selected_year}_{label}_{start_date.year}_{end_date.year}"
-            )
+    if targets_source.empty:
+        target_total = 0
+    else:
+        target_total = targets_source[
+            (targets_source["date"] >= start_date) & (targets_source["date"] <= end_date)
+        ]["target_sales"].sum()
 
-            fig_customers = px.line(
-                summary_display, x="date", y="customer_count",
-                title="客数推移", labels={"customer_count": "客数（人）"}
-            )
-            fig_customers.update_traces(mode="lines+markers")
-            fig_customers.update_layout(xaxis_title="日付")
-            st.plotly_chart(
-                fig_customers,
-                use_container_width=True,
-                key=f"customers_chart_{selected_year}_{label}_{start_date.year}_{end_date.year}"
-            )
+    _render_kpi(actual_total, target_total, prev_actual_period, title_prefix=f"{kpi_title_prefix} ")
 
-            fig_unit = px.line(
-                summary_display, x="date", y="unit_price",
-                title="客単価推移", labels={"unit_price": "客単価（円）"}
-            )
-            fig_unit.update_traces(mode="lines+markers")
-            fig_unit.update_layout(xaxis_title="日付")
-            fig_unit.update_yaxes(tickformat=",")
-            st.plotly_chart(
-                fig_unit,
-                use_container_width=True,
-                key=f"unit_price_chart_{selected_year}_{label}_{start_date.year}_{end_date.year}"
-            )
+    # --- 表示用整形 ---
+    summary_display = summary.copy()
+    summary_display["date"] = summary_display["date"].dt.strftime("%Y/%m/%d")
+
+    # --- グラフ ---
+    fig_sales = px.line(
+        summary_display, x="date", y="actual_sales",
+        title="売上推移", labels={"actual_sales": "売上（円）"}
+    )
+    fig_sales.update_traces(mode="lines+markers")
+    fig_sales.update_layout(xaxis_title="日付")
+    fig_sales.update_yaxes(tickformat=",")
+    st.plotly_chart(
+        fig_sales,
+        use_container_width=True,
+        key=f"sales_chart_{selected_year}_{label}_{start_date.year}_{end_date.year}"
+    )
+
+    fig_customers = px.line(
+        summary_display, x="date", y="customer_count",
+        title="客数推移", labels={"customer_count": "客数（人）"}
+    )
+    fig_customers.update_traces(mode="lines+markers")
+    fig_customers.update_layout(xaxis_title="日付")
+    st.plotly_chart(
+        fig_customers,
+        use_container_width=True,
+        key=f"customers_chart_{selected_year}_{label}_{start_date.year}_{end_date.year}"
+    )
+
+    fig_unit = px.line(
+        summary_display, x="date", y="unit_price",
+        title="客単価推移", labels={"unit_price": "客単価（円）"}
+    )
+    fig_unit.update_traces(mode="lines+markers")
+    fig_unit.update_layout(xaxis_title="日付")
+    fig_unit.update_yaxes(tickformat=",")
+    st.plotly_chart(
+        fig_unit,
+        use_container_width=True,
+        key=f"unit_price_chart_{selected_year}_{label}_{start_date.year}_{end_date.year}"
+    )
