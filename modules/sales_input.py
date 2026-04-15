@@ -92,7 +92,7 @@ def show():
 
             def parse_int_field(value):
                 try:
-                    return int(str(value).replace(",", "").strip())
+                    return int(float(str(value).replace("¥", "").replace(",", "").strip()))
                 except:
                     return 0
 
