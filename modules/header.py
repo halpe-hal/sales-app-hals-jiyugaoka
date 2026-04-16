@@ -91,7 +91,7 @@ def show():
         }
         </style>
         <div class="custom-header">
-            H.A.L. cafe 売上管理
+            HAL'S BAGEL. 自由が丘店 売上管理
         </div>
         """,
         unsafe_allow_html=True

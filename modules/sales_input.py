@@ -1,4 +1,4 @@
-# modules/sales_input.py
+# modules/sales_input.py（新店舗版）
 
 import streamlit as st
 import pandas as pd
@@ -13,26 +13,22 @@ def show():
     st.markdown("<h2>売上入力フォーム</h2>", unsafe_allow_html=True)
 
     today = datetime.today()
-    col1, col2 = st.columns(2)
-
-    with col1:
-        input_date = st.date_input("日付を選択してください", value=today, format="YYYY/MM/DD")
-    with col2:
-        category = st.selectbox("カテゴリ", ["カフェ合計", "ランチ", "ベーグル"])
+    input_date = st.date_input("日付を選択してください", value=today, format="YYYY/MM/DD")
 
     date_str = input_date.strftime('%Y-%m-%d')
     year = input_date.year
     month = input_date.month
 
-    targets = db.fetch_targets(year, month, category)
+    targets = db.fetch_targets(year, month)
     target_sales = 0
     for row in targets:
-        if row["date"] == date_str and row["category"] == category:
+        if row["date"] == date_str:
             target_sales = row["target_sales"]
 
-    existing_sales = db.fetch_sales_data(year, month, category)
+    existing_sales = db.fetch_sales_data(year, month)
     already_exists = any(row["date"] == date_str for row in existing_sales)
 
+    # --- 売上入力フォーム ---
     with st.form("sales_form"):
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -58,7 +54,6 @@ def show():
         else:
             st.warning("⚠️ この日の売上目標が未設定です。")
 
-        # --- 右寄せ保存ボタン ---
         col_space, col_submit = st.columns([9, 1])
         with col_submit:
             submitted = st.form_submit_button("保存")
@@ -73,7 +68,6 @@ def show():
                 "year": year,
                 "month": month,
                 "date": date_str,
-                "category": category,
                 "store_sales": store_val,
                 "delivery_sales": delivery_val,
                 "other_sales": other_val,
@@ -85,17 +79,12 @@ def show():
             st.rerun()
 
     # --- CSVアップロード ---
-    with st.expander("売上CSVアップロード（全体合計 / ディナー以外）"):
-        st.markdown("CSV形式：**日付,カテゴリ,店舗売上,デリバリー売上,その他売上,客数**")
+    with st.expander("売上CSVアップロード"):
+        st.markdown("CSV形式：**日付,店舗売上,デリバリー売上,その他売上,客数**")
         uploaded_file = st.file_uploader("CSVファイルを選択", type=["csv"])
         if uploaded_file:
             try:
                 df_upload = pd.read_csv(uploaded_file, encoding="utf-8")
-                df_upload = df_upload.rename(columns={
-                    "date": "日付", "category": "カテゴリ",
-                    "store_sales": "店舗売上", "delivery_sales": "デリバリー売上",
-                    "other_sales": "その他売上", "customer_count": "客数"
-                })
                 st.dataframe(df_upload)
             except Exception as e:
                 st.error(f"CSV読み込みエラー: {e}")
@@ -103,7 +92,7 @@ def show():
 
             def parse_int_field(value):
                 try:
-                    return int(str(value).replace(",", "").strip())
+                    return int(float(str(value).replace("¥", "").replace(",", "").strip()))
                 except:
                     return 0
 
@@ -123,7 +112,6 @@ def show():
 
                         records.append({
                             "year": year, "month": month, "date": date_str,
-                            "category": row["カテゴリ"],
                             "store_sales": store, "delivery_sales": delivery,
                             "other_sales": other, "actual_sales": actual,
                             "customer_count": cust, "unit_price": unit_price
@@ -136,10 +124,10 @@ def show():
                 st.success(f"{len(records)}件の売上データを保存しました！")
                 st.rerun()
 
-    # --- 入力済みデータ表示 ---
+    # --- 入力済みデータ一覧 ---
     st.markdown("<h2>入力済みデータ一覧</h2>", unsafe_allow_html=True)
-    sales_data = db.fetch_sales_data(year, month, category)
-    targets_data = db.fetch_targets(year, month, category)
+    sales_data = db.fetch_sales_data(year, month)
+    targets_data = db.fetch_targets(year, month)
     targets_df = pd.DataFrame(targets_data)
     sales_df = pd.DataFrame(sales_data)
 
@@ -148,8 +136,7 @@ def show():
         sales_df["日付"] = sales_df["date"].dt.strftime('%Y/%m/%d')
         sales_df["曜日"] = sales_df["date"].dt.dayofweek.map({0:"月",1:"火",2:"水",3:"木",4:"金",5:"土",6:"日"})
         targets_df["date"] = pd.to_datetime(targets_df["date"])
-        sales_df["date"] = pd.to_datetime(sales_df["date"])
-        merged = pd.merge(sales_df, targets_df, on=["date", "category"], how="left")
+        merged = pd.merge(sales_df, targets_df, on="date", how="left")
         merged["目標売上"] = merged["target_sales"]
         merged["達成率"] = merged.apply(lambda row:
             round(row["actual_sales"] * 100 / row["目標売上"], 2)
@@ -174,13 +161,12 @@ def show():
             "unit_price": "客単価"
         })
 
-        # ↓このように続ける
         merged["sort_date"] = pd.to_datetime(merged["日付"], format="%Y/%m/%d")
         merged = merged.sort_values("sort_date").drop(columns="sort_date")
 
         display_cols = ["日付", "曜日", "達成率", "目標売上", "実績", "店舗売上", "デリバリー売上", "その他売上", "客数", "客単価"]
 
-        # --- 合計行の追加（merged生成後の下に追加） ---
+        # --- 合計行 ---
         numeric_cols = ["目標売上", "実績", "店舗売上", "デリバリー売上", "その他売上", "客数", "客単価"]
         cleaned = merged.copy()
 
@@ -207,8 +193,6 @@ def show():
         }
 
         merged = pd.concat([merged[display_cols], pd.DataFrame([summary_row])], ignore_index=True)
-
-
         styled_html = merged[display_cols].to_html(escape=False, index=False)
 
         st.markdown(
@@ -252,21 +236,63 @@ def show():
             unsafe_allow_html=True
         )
 
+    # --- 更新機能 ---
+    st.markdown("<h2>売上データの更新</h2>", unsafe_allow_html=True)
+    if not sales_data:
+        st.info("更新可能なデータがありません。")
+    else:
+        date_list = sorted({row["date"] for row in sales_data})
+        display_dates = [datetime.strptime(d, "%Y-%m-%d").strftime('%Y/%m/%d') for d in date_list]
+
+        selected = st.selectbox("更新対象の日付", ["選択してください"] + display_dates)
+        if selected != "選択してください":
+            target_date = datetime.strptime(selected, "%Y/%m/%d").strftime('%Y-%m-%d')
+            record = next((r for r in sales_data if r["date"] == target_date), None)
+
+            if record:
+                st.write("更新内容を入力してください（未入力は変更しません）")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    new_store = st.number_input("店舗売上", min_value=0, step=1000, value=record["store_sales"])
+                with col2:
+                    new_delivery = st.number_input("デリバリー売上", min_value=0, step=1000, value=record["delivery_sales"])
+                with col3:
+                    new_other = st.number_input("その他売上", min_value=0, step=1000, value=record["other_sales"])
+                with col4:
+                    new_cust = st.number_input("客数", min_value=0, step=1, value=record["customer_count"])
+
+                col_space, col_btn = st.columns([8, 2])
+                with col_btn:
+                    if st.button("このデータを更新"):
+                        new_actual = new_store + new_delivery + new_other
+                        new_unit = new_store / new_cust if new_cust else 0
+
+                        db.insert_sales([{
+                            "year": record["year"],
+                            "month": record["month"],
+                            "date": target_date,
+                            "store_sales": new_store,
+                            "delivery_sales": new_delivery,
+                            "other_sales": new_other,
+                            "actual_sales": new_actual,
+                            "customer_count": new_cust,
+                            "unit_price": new_unit
+                        }])
+                        st.success(f"{selected} の売上データを更新しました")
+                        st.rerun()
+
     # --- 削除処理 ---
     st.markdown("<h2>売上データの削除</h2>", unsafe_allow_html=True)
-    date_list = sorted({row["date"] for row in sales_data})
-    display_dates = [datetime.strptime(d, "%Y-%m-%d").strftime('%Y/%m/%d') for d in date_list]
-
-    if display_dates:
-        selected = st.selectbox("削除対象の日付", ["選択してください"] + display_dates)
-        if selected != "選択してください":
-            confirm = st.checkbox("⚠️ 本当に削除しますか？")
-            if confirm and st.button("このデータを削除"):
-                db.delete_sales_by_date(
-                    datetime.strptime(selected, "%Y/%m/%d").strftime('%Y-%m-%d'),
-                    category
-                )
-                st.success(f"{selected} の {category} の売上データを削除しました")
-                st.rerun()
+    if not sales_data:
+        st.info("削除可能なデータがありません。")
     else:
-        st.info("この月には売上データがありません。")
+        date_list = sorted({row["date"] for row in sales_data})
+        display_dates = [datetime.strptime(d, "%Y-%m-%d").strftime('%Y/%m/%d') for d in date_list]
+
+        selected = st.selectbox("削除対象の日付", ["選択してください"] + display_dates, key="delete_select")
+        if selected != "選択してください":
+            confirm = st.checkbox("⚠️ 本当に削除しますか？", key="delete_confirm")
+            if confirm and st.button("このデータを削除"):
+                db.delete_sales_by_date(datetime.strptime(selected, "%Y/%m/%d").strftime('%Y-%m-%d'))
+                st.success(f"{selected} の売上データを削除しました")
+                st.rerun()

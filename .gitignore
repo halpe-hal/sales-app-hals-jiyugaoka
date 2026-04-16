@@ -14,13 +14,45 @@ env/
 # Streamlit secrets
 .streamlit/secrets.toml
 
+# VSCode関連
+.vscode/
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env
+*.env
+
+# Streamlit
+.streamlit/
+
+# macOS system files
+.AppleDouble
+.LSOverride
+
 # OSやエディタ関連
 .DS_Store
 *.swp
 *.swo
 *.bak
 *.tmp
+
+# Logs
 *.log
 
-# VSCode関連
+# IDE
 .vscode/
+.idea/
+
+# Compiled
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/

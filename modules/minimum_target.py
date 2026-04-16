@@ -10,7 +10,7 @@ def show():
     st.markdown("<h2>最低目標の設定</h2>", unsafe_allow_html=True)
 
     # 管理者チェック
-    if st.session_state["user"]["email"] not in ["nishimura@kklia.com"]:
+    if st.session_state["user"]["email"] not in ["nishimura@kklia.com", "halsbagel.jiyugaoka@gmail.com"]:
         st.warning("この画面にはアクセスできません。")
         st.stop()
 
@@ -18,16 +18,21 @@ def show():
     selected_year = st.selectbox("年を選択", list(range(2024, 2101)),
                                  index=list(range(2024, 2101)).index(today.year), key="min_goal_year")
 
-    # --- 実績売上の取得（対象カテゴリ：カフェ合計・ベーグル） ---
+    # --- 実績売上の取得 ---
     sales = db.fetch_sales_data(year=selected_year)
     df_sales = pd.DataFrame(sales)
+
     if not df_sales.empty:
-        df_sales = df_sales[df_sales["category"].isin(["カフェ合計", "ベーグル"])]
         df_sales["month"] = pd.to_datetime(df_sales["date"]).dt.month
-        df_sales_grouped = df_sales.groupby("month")["actual_sales"].sum().reset_index()
-        df_sales_grouped.rename(columns={"actual_sales": "total_actual"}, inplace=True)
+        df_sales_grouped = (
+            df_sales.groupby("month")["actual_sales"]
+            .sum()
+            .reset_index()
+            .rename(columns={"actual_sales": "total_actual"})
+        )
     else:
         df_sales_grouped = pd.DataFrame(columns=["month", "total_actual"])
+
 
     # --- 最低目標データの取得 ---
     df_min = pd.DataFrame(db.fetch_minimum_targets())
